@@ -1,0 +1,144 @@
+---
+title: "HW2_answer"
+author: "Guojing Wu | UNI: gw2383"
+date: "2/18/2019"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+library(ResourceSelection)
+library(tidyverse)
+knitr::opts_chunk$set(echo = TRUE, 
+                      message = F, 
+                      warning = F)
+theme_set(theme_bw())
+```
+
+## Problem 1
+
+### i) Fill out the table and give comments.
+
+```{r}
+data.bioassay = data.frame(dose = c(0, 1, 2, 3, 4), 
+                  n = c(2, 8, 15, 23, 27))
+resp=cbind(data.bioassay$n, 30 - data.bioassay$n)
+pred=data.bioassay$dose
+fit_result = tibble(Model = c("logit", "probit", "c-log-log"), 
+                    Estimate = rep(0, 3), 
+                    CI = rep("0", 3), 
+                    Deviance = rep(0, 3), 
+                    phat = rep(0, 3))
+
+fit_logit = glm(resp ~ pred, family = binomial(link = 'logit'))
+fit_probit = glm(resp ~ pred, family = binomial(link = 'probit'))
+fit_cloglog = glm(resp ~ pred, family = binomial(link = 'cloglog'))
+fit_all = list(fit_logit, fit_probit, fit_cloglog)
+
+for (i in 1:length(fit_all)) {
+  beta = fit_all[[i]]$coefficients[2] # estimation for beta
+  fit_result$Estimate[i] = round(beta, 3)
+  
+  se = sqrt(vcov(fit_all[[i]])[2,2]) # standard error for beta
+  fit_result$CI[i] = paste("(", round(beta + qnorm(0.025) * se, 3), ", ", round(beta - qnorm(0.025) * se, 3), ")", sep = "")
+  
+  fit_result$Deviance[i] = round(sum(residuals(fit_all[[i]], type = 'deviance')^2), 3) # deviance
+  
+  predi = predict(fit_all[[i]], data.frame(pred = 0.01), se.fit = TRUE, type = 'response')$fit # predicted value
+  fit_result$phat[i] = round(predi, 3)
+}
+
+fit_result %>% knitr::kable()
+```
+
+This is grouped data and each $m_{i} \geq 10$, so we could use the Deviance for goodness-of-fit test $D \sim \chi_{3}^{2}$:
+
+* For logit: p-value = `r 1 - pchisq(fit_result$Deviance[1], 3)`
+
+* For probit: p-value = `r 1 - pchisq(fit_result$Deviance[2], 3)`
+
+* For c-log-log: p-value = `r 1 - pchisq(fit_result$Deviance[3], 3)`
+
+All failed to reject the null hypothesis, which suggests that every model fits the data well.
+
+For logit link, we could interpret that: the log odds ratio of probability of dying is `r fit_result$Estimate[1]` given one unit increase in dose
+
+### ii) Suppose that the dose level is in natural logarithm scale, estimate LD50 with 90% confidence interval based on the three models.
+
+$$
+\begin{split}
+\hat{x_{0}} &=  f(\hat{\alpha}, \hat{\beta}) = \frac{g(0.5) - \hat{\alpha}}{\hat{\beta}} \\
+\frac{\partial f}{\partial \hat{\alpha}} &= -\frac{1}{\hat{\beta}} \\
+\frac{\partial f}{\partial \hat{\beta}} &= \frac{g(0.5) - \hat{\alpha}}{\hat{\beta}^{2}}
+\end{split}
+$$
+
+```{r}
+pred_result = tibble(Model = c("logit", "probit", "c-log-log"), 
+                     g = c(log(0.5/(1-0.5)), qnorm(0.5), log(-log(1-0.5))), 
+                     Estimation = rep(0, 3), 
+                     Variance = rep(0, 3), 
+                     CI = rep("0", 3))
+
+for (i in 1:length(fit_all)) {
+  beta0 = fit_all[[i]]$coefficients[1]
+  beta1 = fit_all[[i]]$coefficients[2]
+  betacov = vcov(fit_all[[i]]) # inverse fisher information
+  x0fit = (pred_result$g[i] - beta0)/beta1 # point estimate of LD50
+  pred_result$Estimation[i] = round(exp(x0fit) , 3)
+  
+  varx0 = betacov[1,1]/(beta1^2) + betacov[2,2]*((beta0 - pred_result$g[i])^2)/(beta1^4) - 2*betacov[1,2]*(beta0 - pred_result$g[i])/(beta1^3) # variance of x0fit
+  pred_result$Variance[i] = round(varx0, 3)
+  
+  pred_result$CI[i] = paste("(", round(exp(x0fit + qnorm(0.05) * sqrt(varx0)), 3), ", ", round(exp(x0fit - qnorm(0.05) * sqrt(varx0)), 3), ")", sep = "")
+}
+
+pred_result %>% knitr::kable()
+```
+
+## Problem 2
+
+### i) How does the model fit the data?
+
+This is grouped data, but it's sparse. So we use Hosmer-Lemeshow staistic $\chi_{HL}^{2} \sim \chi_{8}^{2}$:
+
+```{r}
+data.mph = data.frame(amount = seq(from = 10, to = 90, by = 5), 
+                      offers = c(4, 6, 10, 12, 39, 36, 22, 14, 10, 12, 8, 9, 3, 1, 5, 2, 1), 
+                      enrolls = c(0, 2, 4, 2, 12, 14, 10, 7, 5, 5, 3, 5, 2, 0, 4, 2, 1))
+resp = cbind(data.mph$enrolls, data.mph$offers - data.mph$enrolls)
+pred = data.mph$amount
+fit_mph = glm(resp~pred,family=binomial(link='logit'))
+
+hi = hoslem.test(fit_mph$y, fitted(fit_mph), g = 10)
+```
+
+The test result showed p-value = `r round(hi$p.value, 3)`, we failed to reject $H_{0}$, which suggests that the model fits the data well.
+
+### ii) How do you interpret the relationship between the scholarship amount and the enrollment rate? What is 95% CI?
+
+```{r}
+beta = fit_mph$coefficients[2]
+se = sqrt(vcov(fit_mph)[2,2]) # standard error
+```
+
+Let p stand for enrollment rate, $logit(p) = \beta_{0} + \beta_{1}x$.
+
+We calculate $\hat{\beta_{1}}$ = `r round(beta, 3)`, so for per $1,000 increase in scholarship, the log odds ratio of enrollment rate is `r round(beta, 3)`.
+
+$CI_{\hat{\beta_{1}}}$ = (`r round(beta + qnorm(0.025) * se, 3)`, `r round(beta - qnorm(0.025) * se, 3)`)
+
+### iii) How much scholarship should we provide to get 40% yield rate? What is the 95% CI?
+
+p = 0.4
+
+```{r}
+beta0 = fit_mph$coefficients[1]
+beta1 = fit_mph$coefficients[2]
+betacov = vcov(fit_mph) # inverse fisher information
+x0fit = (log(0.4/0.6) - beta0)/beta1
+varx0 = betacov[1,1]/(beta1^2) + betacov[2,2]*((beta0 - log(0.4/0.6))^2)/(beta1^4)-2*betacov[1,2]*(beta0 - log(0.4/0.6))/(beta1^3)
+```
+
+So we need `r round(x0fit, 3)` thousands scholarship to get 40% yield rate. 
+
+$CI_{\hat{x_{0}}}$ = (`r round((x0fit + qnorm(0.025) * sqrt(varx0)), 3)`, `r round((x0fit - qnorm(0.025) * sqrt(varx0)), 3)`)
